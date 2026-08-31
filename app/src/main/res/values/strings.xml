@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Shizuku Terminal</string>
+    <string name="status_available">Shizuku: 已连接</string>
+    <string name="status_unavailable">Shizuku: 未连接</string>
+    <string name="status_unauthorized">Shizuku: 未授权</string>
+    <string name="status_checking">Shizuku: 检查中...</string>
+    <string name="hint_input_command">输入命令，例如: ls -la /data</string>
+    <string name="action_execute">执行</string>
+    <string name="action_clear">清空</string>
+    <string name="action_authorize">申请权限</string>
+    <string name="output_title">输出:</string>
+    <string name="command_prefix">$ </string>
+    <string name="error_no_shizuku">Shizuku 服务不可用，请先安装并启动 Shizuku</string>
+    <string name="error_no_permission">没有 Shizuku 权限，请点击"申请权限"</string>
+    <string name="execute_mode_shizuku">执行模式: Shizuku (Root/SHELL)</string>
+    <string name="execute_mode_normal">执行模式: 普通应用</string>
+</resources>
