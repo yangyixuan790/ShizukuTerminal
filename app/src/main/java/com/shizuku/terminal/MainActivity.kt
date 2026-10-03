@@ -28,16 +28,20 @@ class MainActivity : AppCompatActivity() {
     private val commandHistory = mutableListOf<String>()
     private var historyIndex = -1
 
+    /** Activity 是否已销毁，用于守护后台线程回调不操作死 View */
+    @Volatile
+    private var activityDestroyed = false
+
     private val shizukuProviderListener = Shizuku.OnBinderReceivedListener {
-        runOnUiThread { updateShizukuStatus() }
+        runOnUiThreadSafely { updateShizukuStatus() }
     }
 
     private val shizukuDeadListener = Shizuku.OnBinderDeadListener {
-        runOnUiThread { updateShizukuStatus() }
+        runOnUiThreadSafely { updateShizukuStatus() }
     }
 
-    private val requestPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        runOnUiThread {
+    private val requestPermissionListener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+        runOnUiThreadSafely {
             updateShizukuStatus()
             if (grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 appendOutputInfo("✓ Shizuku 权限已授予\n")
@@ -55,41 +59,51 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         setupListeners()
 
+        // [修复 Bug 1] 全部 Shizuku 监听器注册都必须包裹 try-catch。
+        // Shizuku 未安装/未启动时，addBinderDeadListener 和
+        // addRequestPermissionResultListener 会抛 NPE 导致启动闪退。
         try {
             Shizuku.addBinderReceivedListener(shizukuProviderListener)
-        } catch (e: Exception) {
-            // try with the "sticky" pattern via reflective call if normal fails
+        } catch (e: Throwable) {
+            // Shizuku 不可用时静默忽略
         }
-        Shizuku.addBinderDeadListener(shizukuDeadListener)
-        Shizuku.addRequestPermissionResultListener(requestPermissionListener)
+        try {
+            Shizuku.addBinderDeadListener(shizukuDeadListener)
+        } catch (e: Throwable) {
+            // ignore
+        }
+        try {
+            Shizuku.addRequestPermissionResultListener(requestPermissionListener)
+        } catch (e: Throwable) {
+            // ignore
+        }
 
-        updateShizukuStatus()
-        appendOutputInfo("Shizuku Terminal v1.0 已启动\n")
-        appendOutputInfo("提示: 输入命令后点击执行，或直接回车\n")
-        appendOutputInfo("========================================\n")
+        runOnUiThreadSafely {
+            updateShizukuStatus()
+            appendOutputInfo("Shizuku Terminal v1.0.1 已启动\n")
+            appendOutputInfo("提示: 输入命令后点击执行，或直接回车\n")
+            appendOutputInfo("========================================\n")
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        updateShizukuStatus()
+        runOnUiThreadSafely { updateShizukuStatus() }
     }
 
     override fun onDestroy() {
+        activityDestroyed = true
+        // 取消正在执行的命令，避免后台线程回调死 Activity
+        executor.cancelAll()
         try {
             Shizuku.removeBinderReceivedListener(shizukuProviderListener)
-        } catch (e: Exception) {
-            // ignore
-        }
+        } catch (e: Throwable) { /* ignore */ }
         try {
             Shizuku.removeBinderDeadListener(shizukuDeadListener)
-        } catch (e: Exception) {
-            // ignore
-        }
+        } catch (e: Throwable) { /* ignore */ }
         try {
             Shizuku.removeRequestPermissionResultListener(requestPermissionListener)
-        } catch (e: Exception) {
-            // ignore
-        }
+        } catch (e: Throwable) { /* ignore */ }
         super.onDestroy()
     }
 
@@ -147,8 +161,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateShizukuStatus() {
-        val available = executor.isShizukuAvailable()
-        val hasPermission = if (available) executor.hasShizukuPermission() else false
+        val available = try { executor.isShizukuAvailable() } catch (e: Throwable) { false }
+        val hasPermission = if (available) {
+            try { executor.hasShizukuPermission() } catch (e: Throwable) { false }
+        } else false
 
         when {
             !available -> {
@@ -186,15 +202,15 @@ class MainActivity : AppCompatActivity() {
 
         executor.execute(command, object : ShizukuExecutor.OnExecuteListener {
             override fun onOutput(text: String) {
-                runOnUiThread { appendOutput(text) }
+                runOnUiThreadSafely { appendOutput(text) }
             }
 
             override fun onError(text: String) {
-                runOnUiThread { appendOutputError(text) }
+                runOnUiThreadSafely { appendOutputError(text) }
             }
 
             override fun onExit(exitCode: Int) {
-                runOnUiThread {
+                runOnUiThreadSafely {
                     if (exitCode == 0) {
                         appendOutputInfo("[进程退出，exit code: 0]\n")
                     } else {
@@ -255,6 +271,22 @@ class MainActivity : AppCompatActivity() {
         val scrollView = tvOutput.parent as? android.widget.ScrollView
         scrollView?.post {
             scrollView.scrollTo(0, tvOutput.bottom)
+        }
+    }
+
+    /**
+     * 安全地在主线程执行 UI 更新。
+     * Activity 已销毁或正在 finishing 时直接丢弃，防止操作死 View 导致崩溃。
+     */
+    private fun runOnUiThreadSafely(block: () -> Unit) {
+        if (activityDestroyed || isFinishing) return
+        runOnUiThread {
+            if (activityDestroyed || isFinishing) return@runOnUiThread
+            try {
+                block()
+            } catch (e: Throwable) {
+                // UI 更新异常不应该让 App 崩溃
+            }
         }
     }
 }
